@@ -1,12 +1,12 @@
 import {
   Horizon,
-  Networks,
   TransactionBuilder,
   Operation,
   Address,
   nativeToScVal,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
+import { config } from '../config/index.js';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -14,7 +14,7 @@ export interface BuildDepositParams {
   userPublicKey: string;
   vaultContractId: string;
   amountUsdc: string;
-  network: StellarNetwork;
+  network?: StellarNetwork;
   sourceAccount?: string;
 }
 
@@ -59,8 +59,23 @@ export class TransactionBuilderService {
   async buildDepositTransaction(
     params: BuildDepositParams
   ): Promise<UnsignedTransaction> {
+    const selectedNetwork = params.network ?? config.stellar.network;
+
+    if (selectedNetwork !== config.stellar.network) {
+      throw new NetworkError(
+        `Configured network is '${config.stellar.network}' but request used '${selectedNetwork}'. Cross-network mixing is not allowed.`
+      );
+    }
+
+    const expectedVaultContractId = config.stellar.networks[selectedNetwork].vaultContractId;
+    if (expectedVaultContractId && expectedVaultContractId !== params.vaultContractId) {
+      throw new NetworkError(
+        `Vault contract ID does not match configured ${selectedNetwork} contract ID.`
+      );
+    }
+
     // Step 1: Initialize Stellar SDK with network
-    const { networkPassphrase, horizonUrl } = this.getNetworkConfig(params.network);
+    const { networkPassphrase, horizonUrl } = this.getNetworkConfig(selectedNetwork);
 
     const server = new Horizon.Server(horizonUrl);
 
@@ -121,7 +136,7 @@ export class TransactionBuilderService {
     // Step 8: Construct response
     return {
       xdr: xdrString,
-      network: params.network,
+      network: selectedNetwork,
       operation: {
         type: 'invoke_contract',
         contractId: params.vaultContractId,
@@ -140,17 +155,11 @@ export class TransactionBuilderService {
     networkPassphrase: string;
     horizonUrl: string;
   } {
-    if (network === 'testnet') {
-      return {
-        networkPassphrase: Networks.TESTNET,
-        horizonUrl: 'https://horizon-testnet.stellar.org',
-      };
-    } else {
-      return {
-        networkPassphrase: Networks.PUBLIC,
-        horizonUrl: 'https://horizon.stellar.org',
-      };
-    }
+    const networkConfig = config.stellar.networks[network];
+    return {
+      networkPassphrase: networkConfig.networkPassphrase,
+      horizonUrl: networkConfig.horizonUrl,
+    };
   }
 
   private convertUsdcToStroops(amountUsdc: string): bigint {

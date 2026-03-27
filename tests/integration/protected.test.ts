@@ -260,15 +260,31 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
 
 describe('requireAuth – accepts valid credentials on protected routes', () => {
   let app: express.Express;
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  const bearerToken = () =>
+    signTestToken({
+      userId: 'user-42',
+      walletAddress: 'GDTEST123STELLAR',
+    });
 
   beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
     app = buildRealApp();
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret !== undefined) {
+      process.env.JWT_SECRET = originalJwtSecret;
+    } else {
+      delete process.env.JWT_SECRET;
+    }
   });
 
   it('authenticates via Bearer token on GET /api/developers/apis', async () => {
     const res = await request(app)
       .get('/api/developers/apis')
-      .set('Authorization', 'Bearer user-42');
+      .set('Authorization', `Bearer ${bearerToken()}`);
 
     // Auth passes; the route itself may return 200 (empty list) or 404 depending on developer lookup
     expect(res.status).not.toBe(401);
@@ -285,7 +301,7 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
   it('authenticates via Bearer token on GET /api/developers/analytics', async () => {
     const res = await request(app)
       .get('/api/developers/analytics?from=2026-01-01&to=2026-01-31')
-      .set('Authorization', 'Bearer user-42');
+      .set('Authorization', `Bearer ${bearerToken()}`);
 
     expect(res.status).not.toBe(401);
   });
@@ -301,7 +317,7 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
   it('authenticates via Bearer token on POST /api/vault/deposit/prepare', async () => {
     const res = await request(app)
       .post('/api/vault/deposit/prepare')
-      .set('Authorization', 'Bearer user-42')
+      .set('Authorization', `Bearer ${bearerToken()}`)
       .send({ amount_usdc: '10.00' });
 
     // 404 (no vault) is acceptable — not 401
@@ -320,7 +336,7 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
   it('authenticates via Bearer token on DELETE /api/keys/:id', async () => {
     const res = await request(app)
       .delete('/api/keys/nonexistent-id')
-      .set('Authorization', 'Bearer user-42');
+      .set('Authorization', `Bearer ${bearerToken()}`);
 
     // 204 (not_found falls through to 204 in current impl) — not 401
     expect(res.status).not.toBe(401);

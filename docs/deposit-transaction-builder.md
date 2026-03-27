@@ -224,10 +224,18 @@ npm test -- src/services/transactionBuilder.test.ts
 ## Environment Variables
 
 ```bash
-STELLAR_NETWORK=testnet              # or 'mainnet'
-STELLAR_HORIZON_URL=https://...      # Optional: override default
-STELLAR_BASE_FEE=100                 # Optional: default 100 stroops
-TRANSACTION_TIMEOUT=300              # Optional: default 5 minutes
+STELLAR_NETWORK=testnet                      # or 'mainnet' (SOROBAN_NETWORK also supported)
+
+# Testnet endpoints/contracts
+STELLAR_TESTNET_HORIZON_URL=https://horizon-testnet.stellar.org
+STELLAR_TESTNET_VAULT_CONTRACT_ID=CC...TESTNET_VAULT
+
+# Mainnet endpoints/contracts
+STELLAR_MAINNET_HORIZON_URL=https://horizon.stellar.org
+STELLAR_MAINNET_VAULT_CONTRACT_ID=CC...MAINNET_VAULT
+
+STELLAR_BASE_FEE=100                         # Optional: default 100 stroops
+TRANSACTION_TIMEOUT=300                      # Optional: default 5 minutes
 ```
 
 ## Notes

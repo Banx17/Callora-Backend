@@ -8,6 +8,7 @@ import {
   NetworkError,
 } from '../services/transactionBuilder.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
+import { config } from '../config/index.js';
 
 export interface DepositPrepareRequest {
   amount_usdc: string;
@@ -93,12 +94,22 @@ export class DepositController {
       }
 
       // Step 4: Validate and default network
-      const network = (requestBody.network ?? 'testnet') as StellarNetwork;
+      const network = (requestBody.network ?? config.stellar.network) as StellarNetwork;
       if (network !== 'testnet' && network !== 'mainnet') {
         res.status(400).json({
           error: 'network must be either "testnet" or "mainnet"',
           code: 'INVALID_NETWORK',
           provided: requestBody.network,
+        });
+        return;
+      }
+
+      if (network !== config.stellar.network) {
+        res.status(400).json({
+          error: `Configured network is '${config.stellar.network}'. Cross-network requests are not allowed.`,
+          code: 'NETWORK_MISMATCH',
+          provided: network,
+          configured: config.stellar.network,
         });
         return;
       }

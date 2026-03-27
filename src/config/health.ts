@@ -6,6 +6,7 @@
 
 import { Pool } from 'pg';
 import type { HealthCheckConfig } from '../services/healthCheck.js';
+import { config as appConfig } from './index.js';
 
 let dbPool: Pool | null = null;
 
@@ -46,17 +47,19 @@ export function buildHealthCheckConfig(): HealthCheckConfig | undefined {
   };
 
   // Add Soroban RPC if enabled
-  if (process.env.SOROBAN_RPC_ENABLED === 'true' && process.env.SOROBAN_RPC_URL) {
+  const sorobanRpcUrl = process.env.SOROBAN_RPC_URL || appConfig.stellar.sorobanRpcUrl;
+  if (process.env.SOROBAN_RPC_ENABLED === 'true' && sorobanRpcUrl) {
     config.sorobanRpc = {
-      url: process.env.SOROBAN_RPC_URL,
+      url: sorobanRpcUrl,
       timeout: parseInt(process.env.SOROBAN_RPC_TIMEOUT || '2000', 10),
     };
   }
 
   // Add Horizon if enabled
-  if (process.env.HORIZON_ENABLED === 'true' && process.env.HORIZON_URL) {
+  const horizonUrl = process.env.HORIZON_URL || appConfig.stellar.horizonUrl;
+  if (process.env.HORIZON_ENABLED === 'true' && horizonUrl) {
     config.horizon = {
-      url: process.env.HORIZON_URL,
+      url: horizonUrl,
       timeout: parseInt(process.env.HORIZON_TIMEOUT || '2000', 10),
     };
   }
