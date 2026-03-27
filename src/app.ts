@@ -326,10 +326,96 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     });
   });
 
-  app.get('/api/usage', (req, res) => {
-    const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
-    res.json(paginatedResponse([], { limit, offset }));
-  });
+  app.get('/api/usage', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+  const user = res.locals.authenticatedUser;
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  // Parse and validate query parameters
+  const from = parseDate(req.query.from);
+  const to = parseDate(req.query.to);
+  
+  // Set default period: last 30 days if not provided
+  const now = new Date();
+  const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+  const defaultTo = now;
+  
+  let queryFrom = from || defaultFrom;
+  let queryTo = to || defaultTo;
+  
+  if (!from && !to) {
+    // Use default period when neither is specified
+  } else if (from && !to) {
+    // If only from is specified, use current time as to
+    queryTo = now;
+  } else if (!from && to) {
+    // If only to is specified, use 30 days before as from
+    queryFrom = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+  
+  if (queryFrom > queryTo) {
+    res.status(400).json({ error: 'from must be before or equal to to' });
+    return;
+  }
+
+  const limitParam = parseNonNegativeIntegerParam(req.query.limit);
+  if (limitParam.invalid) {
+    res.status(400).json({ error: 'limit must be a non-negative integer' });
+    return;
+  }
+
+  const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
+
+  try {
+    // Get usage events for the user
+    const events = await usageEventsRepository.findByUser({
+      userId: user.id,
+      from: queryFrom,
+      to: queryTo,
+      apiId,
+      limit: limitParam.value,
+    });
+
+    // Get aggregated statistics
+    const stats = await usageEventsRepository.aggregateByUser({
+      userId: user.id,
+      from: queryFrom,
+      to: queryTo,
+      apiId,
+    });
+
+    // Format response
+    const response = {
+      events: events.map(event => ({
+        id: event.id,
+        apiId: event.apiId,
+        endpoint: event.endpoint,
+        occurredAt: event.occurredAt.toISOString(),
+        revenue: event.revenue.toString(),
+      })),
+      stats: {
+        totalCalls: stats.totalCalls,
+        totalSpent: stats.totalRevenue.toString(),
+        breakdownByApi: stats.breakdownByApi.map(stat => ({
+          apiId: stat.apiId,
+          calls: stat.calls,
+          revenue: stat.revenue.toString(),
+        })),
+      },
+      period: {
+        from: queryFrom.toISOString(),
+        to: queryTo.toISOString(),
+      },
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching user usage:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
   app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     const user = res.locals.authenticatedUser;

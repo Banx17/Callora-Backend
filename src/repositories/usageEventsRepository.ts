@@ -17,6 +17,14 @@ export interface UsageEventQuery {
   apiId?: string;
 }
 
+export interface UserUsageEventQuery {
+  userId: string;
+  from: Date;
+  to: Date;
+  apiId?: string;
+  limit?: number;
+}
+
 export interface UsageStats {
   apiId: string;
   calls: number;
@@ -25,8 +33,10 @@ export interface UsageStats {
 
 export interface UsageEventsRepository {
   findByDeveloper(query: UsageEventQuery): Promise<UsageEvent[]>;
+  findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]>;
   developerOwnsApi(developerId: string, apiId: string): Promise<boolean>;
   aggregateByDeveloper(developerId: string): Promise<UsageStats[]>;
+  aggregateByUser(query: UserUsageEventQuery): Promise<{ totalRevenue: bigint; totalCalls: number; breakdownByApi: UsageStats[] }>;
 }
 
 export class InMemoryUsageEventsRepository implements UsageEventsRepository {
@@ -44,6 +54,27 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
 
       return event.occurredAt >= query.from && event.occurredAt <= query.to;
     });
+  }
+
+  async findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]> {
+    let filtered = this.events.filter((event) => {
+      if (event.userId !== query.userId) {
+        return false;
+      }
+
+      if (query.apiId && event.apiId !== query.apiId) {
+        return false;
+      }
+
+      return event.occurredAt >= query.from && event.occurredAt <= query.to;
+    });
+
+    // Apply limit if specified
+    if (query.limit && query.limit > 0) {
+      filtered = filtered.slice(0, query.limit);
+    }
+
+    return filtered;
   }
 
   async developerOwnsApi(developerId: string, apiId: string): Promise<boolean> {
@@ -72,5 +103,48 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       calls: values.calls,
       revenue: values.revenue,
     }));
+  }
+
+  async aggregateByUser(query: UserUsageEventQuery): Promise<{ totalRevenue: bigint; totalCalls: number; breakdownByApi: UsageStats[] }> {
+    const statsByApi = new Map<string, { calls: number; revenue: bigint }>();
+    let totalCalls = 0;
+    let totalRevenue = BigInt(0);
+
+    for (const event of this.events) {
+      if (event.userId !== query.userId) {
+        continue;
+      }
+
+      if (event.occurredAt < query.from || event.occurredAt > query.to) {
+        continue;
+      }
+
+      if (query.apiId && event.apiId !== query.apiId) {
+        continue;
+      }
+
+      totalCalls += 1;
+      totalRevenue += event.revenue;
+
+      const existing = statsByApi.get(event.apiId);
+      if (existing) {
+        existing.calls += 1;
+        existing.revenue += event.revenue;
+      } else {
+        statsByApi.set(event.apiId, { calls: 1, revenue: event.revenue });
+      }
+    }
+
+    const breakdownByApi = [...statsByApi.entries()].map(([apiId, values]) => ({
+      apiId,
+      calls: values.calls,
+      revenue: values.revenue,
+    }));
+
+    return {
+      totalRevenue,
+      totalCalls,
+      breakdownByApi,
+    };
   }
 }
