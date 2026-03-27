@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
+import routes from './routes/index.js';
+import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
   type GroupBy,
@@ -75,6 +78,9 @@ const parseNonNegativeIntegerParam = (
 
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
+  
+  // Set database pool in locals for billing routes
+  app.locals.dbPool = pool;
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
@@ -88,6 +94,41 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const vaultController = new VaultController(vaultRepository);
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
+
+  // Production-safe security headers with environment-based configuration
+  const isProduction = process.env.NODE_ENV === 'production';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  
+  // Apply Helmet with production-safe defaults
+  app.use(helmet({
+    // Content Security Policy - stricter in production
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for development
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'", ...(isDevelopment ? ["ws:", "wss:"] : [])],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
+    // Cross-Origin Embedder Policy
+    crossOriginEmbedderPolicy: isProduction ? { policy: "require-corp" } : false,
+    // HSTS - only in production with HTTPS
+    hsts: isProduction ? {
+      maxAge: 31536000, // 1 year
+      includeSubDomains: true,
+      preload: true
+    } : false,
+    // Other security headers
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    permittedCrossDomainPolicies: false,
+    // Allow dev tools in development
+    hidePoweredBy: !isDevelopment,
+  }));
 
   app.use(requestIdMiddleware);
 
@@ -105,26 +146,82 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.use(requestLogger);
 
+  // Parse allowed origins with validation
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
     .split(',')
-    .map((o) => o.trim());
+    .map((o: string) => o.trim())
+    .filter((o: string) => o.length > 0);
+
+  // Validate origins in production
+  if (isProduction && allowedOrigins.length === 0) {
+    console.warn('WARNING: No CORS_ALLOWED_ORIGINS configured in production');
+  }
 
   app.use(
     cors({
-      origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) {
+          return callback(null, true);
         }
+
+        // Check if origin is in allowlist
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        // In development, allow localhost with any port
+        if (isDevelopment && origin.startsWith('http://localhost:')) {
+          return callback(null, true);
+        }
+
+        // Log blocked attempts in production
+        if (isProduction) {
+          console.warn(`CORS blocked origin: ${origin}`);
+        }
+
+        callback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
+      allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'x-admin-api-key',
+        'x-user-id', // Added for authentication
+        'x-request-id' // Added for tracing
+      ],
       credentials: true,
+      // Reduce preflight cache time in production for security
+      maxAge: isProduction ? 600 : 86400, // 10 minutes vs 24 hours
+      optionsSuccessStatus: 204, // No content for preflight
     }),
   );
   app.use(express.json());
 
+  /**
+   * GET /api/health
+   *
+   * Provides health status of the application and its dependencies.
+   * If health check config is minimally configured, returns a basic status.
+   *
+   * @schema HealthCheckResult | BasicHealthResult
+   * @example Basic
+   * {
+   *   "status": "ok",
+   *   "service": "callora-backend"
+   * }
+   * @example Full
+   * {
+   *   "status": "ok",
+   *   "version": "1.0.0",
+   *   "timestamp": "2026-03-27T10:00:00.000Z",
+   *   "checks": {
+   *     "api": "ok",
+   *     "database": "ok",
+   *     "soroban_rpc": "ok"
+   *   }
+   * }
+   */
   app.get('/api/health', async (_req, res) => {
     // If no health check config provided, return simple health check
     if (!dependencies?.healthCheckConfig) {
@@ -151,12 +248,48 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.use('/api/admin', adminRouter);
 
+  // Mount all routes including billing
+  app.use('/api', routes);
+
 
   app.get('/api/apis', (req, res) => {
     const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
     res.json(paginatedResponse([], { limit, offset }));
   });
 
+  /**
+   * GET /api/apis/:id
+   *
+   * Retrieves full details for a specific API, including pricing endpoints.
+   *
+   * Path params:
+   *   id - Positive integer ID of the API
+   *
+   * @schema ApiWithEndpointsDetails
+   * @example
+   * {
+   *   "id": 1,
+   *   "name": "Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "logo_url": null,
+   *   "category": "weather",
+   *   "status": "active",
+   *   "developer": {
+   *     "name": "Alice Dev",
+   *     "website": "https://alice.example.com",
+   *     "description": "Building climate tools"
+   *   },
+   *   "endpoints": [
+   *     {
+   *       "path": "/v1/current",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.001",
+   *       "description": "Current conditions"
+   *     }
+   *   ]
+   * }
+   */
   app.get('/api/apis/:id', async (req, res) => {
     const rawId = req.params.id;
     const id = Number(rawId);
@@ -193,10 +326,96 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     });
   });
 
-  app.get('/api/usage', (req, res) => {
-    const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
-    res.json(paginatedResponse([], { limit, offset }));
-  });
+  app.get('/api/usage', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+  const user = res.locals.authenticatedUser;
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  // Parse and validate query parameters
+  const from = parseDate(req.query.from);
+  const to = parseDate(req.query.to);
+  
+  // Set default period: last 30 days if not provided
+  const now = new Date();
+  const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+  const defaultTo = now;
+  
+  let queryFrom = from || defaultFrom;
+  let queryTo = to || defaultTo;
+  
+  if (!from && !to) {
+    // Use default period when neither is specified
+  } else if (from && !to) {
+    // If only from is specified, use current time as to
+    queryTo = now;
+  } else if (!from && to) {
+    // If only to is specified, use 30 days before as from
+    queryFrom = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+  
+  if (queryFrom > queryTo) {
+    res.status(400).json({ error: 'from must be before or equal to to' });
+    return;
+  }
+
+  const limitParam = parseNonNegativeIntegerParam(req.query.limit);
+  if (limitParam.invalid) {
+    res.status(400).json({ error: 'limit must be a non-negative integer' });
+    return;
+  }
+
+  const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
+
+  try {
+    // Get usage events for the user
+    const events = await usageEventsRepository.findByUser({
+      userId: user.id,
+      from: queryFrom,
+      to: queryTo,
+      apiId,
+      limit: limitParam.value,
+    });
+
+    // Get aggregated statistics
+    const stats = await usageEventsRepository.aggregateByUser({
+      userId: user.id,
+      from: queryFrom,
+      to: queryTo,
+      apiId,
+    });
+
+    // Format response
+    const response = {
+      events: events.map(event => ({
+        id: event.id,
+        apiId: event.apiId,
+        endpoint: event.endpoint,
+        occurredAt: event.occurredAt.toISOString(),
+        revenue: event.revenue.toString(),
+      })),
+      stats: {
+        totalCalls: stats.totalCalls,
+        totalSpent: stats.totalRevenue.toString(),
+        breakdownByApi: stats.breakdownByApi.map(stat => ({
+          apiId: stat.apiId,
+          calls: stat.calls,
+          revenue: stat.revenue.toString(),
+        })),
+      },
+      period: {
+        from: queryFrom.toISOString(),
+        to: queryTo.toISOString(),
+      },
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching user usage:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
   app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     const user = res.locals.authenticatedUser;
@@ -261,6 +480,36 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.json({ data: payload });
   });
 
+  /**
+   * GET /api/developers/analytics
+   *
+   * Retrieves usage and revenue analytics for the authenticated developer.
+   *
+   * Query params:
+   *   from       - Start date (ISO-8601 string) (required)
+   *   to         - End date (ISO-8601 string) (required)
+   *   groupBy    - Aggregation period: 'day', 'week', 'month' (default 'day')
+   *   apiId      - Filter by specific API ID (optional)
+   *   includeTop - Include top endpoints and users (optional, default false)
+   *
+   * @schema DeveloperAnalyticsResponse
+   * @example
+   * {
+   *   "data": [
+   *     {
+   *       "period": "2026-02-01",
+   *       "calls": 2,
+   *       "revenue": "240"
+   *     }
+   *   ],
+   *   "topEndpoints": [
+   *     { "endpoint": "/v1/search", "calls": 2 }
+   *   ],
+   *   "topUsers": [
+   *     { "userId": "user-a", "calls": 2 }
+   *   ]
+   * }
+   */
   app.get('/api/developers/analytics', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     const user = res.locals.authenticatedUser;
     if (!user) {
@@ -335,7 +584,54 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.status(204).send();
   });
 
-  // POST /api/developers/apis — publish a new API (authenticated)
+  /**
+   * POST /api/developers/apis
+   *
+   * Publishes a new API for the authenticated developer.
+   *
+   * @schema CreateApiInput -> ApiWithEndpoints
+   * @example Request
+   * {
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "endpoints": [
+   *     {
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast"
+   *     }
+   *   ]
+   * }
+   * @example Response (201 Created)
+   * {
+   *   "id": 1,
+   *   "developer_id": 42,
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "logo_url": null,
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "created_at": "2026-03-27T10:00:00.000Z",
+   *   "updated_at": "2026-03-27T10:00:00.000Z",
+   *   "endpoints": [
+   *     {
+   *       "id": 1,
+   *       "api_id": 1,
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast",
+   *       "created_at": "2026-03-27T10:00:00.000Z",
+   *       "updated_at": "2026-03-27T10:00:00.000Z"
+   *     }
+   *   ]
+   * }
+   */
   app.post('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
     try {
       const user = res.locals.authenticatedUser;

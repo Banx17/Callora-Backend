@@ -22,19 +22,13 @@ jest.mock('../webhooks/webhook.dispatcher.js', () => ({
 describe('Event Emitter - Memory Leak Safety', () => {
     beforeEach(() => {
         // Clear webhook store before each test
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        WebhookStore.clear();
         
     });
 
     afterEach(() => {
         // Clean up webhook store after each test
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        WebhookStore.clear();
         
     });
 
@@ -172,13 +166,10 @@ describe('Event Emitter - Memory Leak Safety', () => {
 
         assert.equal(WebhookStore.list().length, initialCount + 100, 'Webhook store should contain all registered configs');
 
-        // Clean up all configs
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        // Clean up all configs using clear method
+        WebhookStore.clear();
 
-        assert.equal(WebhookStore.list().length, initialCount, 'Webhook store should be clean after deletion');
+        assert.equal(WebhookStore.list().length, 0, 'Webhook store should be empty after clear');
     });
 
     test('event payload structure is maintained correctly', async () => {

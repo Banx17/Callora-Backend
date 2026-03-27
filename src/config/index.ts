@@ -1,110 +1,107 @@
-import { Networks } from '@stellar/stellar-sdk';
+import "dotenv/config";
+import { z } from "zod";
 
-export type StellarNetwork = 'testnet' | 'mainnet';
+/**
+ * Utility to mask sensitive values in logs
+ */
+const mask = (value: string) => `${value.slice(0, 2)}****${value.slice(-2)}`;
 
-export interface StellarNetworkConfig {
-  network: StellarNetwork;
-  networkPassphrase: string;
-  horizonUrl: string;
-  sorobanRpcUrl: string;
-  vaultContractId?: string;
-  settlementContractId?: string;
-}
+/**
+ * Environment schema
+ */
+const envSchema = z.object({
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
 
-function readEnv(name: string): string | undefined {
-  const raw = process.env[name];
-  if (!raw) {
-    return undefined;
+  PORT: z.coerce.number().default(3000),
+
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required")
+    .default(
+      "postgresql://postgres:postgres@localhost:5432/callora?schema=public",
+    ),
+
+  JWT_SECRET: z
+    .string()
+    .min(10, "JWT_SECRET must be at least 10 characters")
+    .optional(),
+
+  METRICS_API_KEY: z.string().optional(),
+
+  DB_POOL_MAX: z.coerce.number().default(10),
+  DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30000),
+  DB_CONN_TIMEOUT_MS: z.coerce.number().default(2000),
+
+  // Stellar / blockchain related
+  SOROBAN_RPC_URL: z.string().url().optional(),
+  HORIZON_URL: z.string().url().optional(),
+});
+
+/**
+ * Parse and validate env
+ */
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error("❌ Invalid environment configuration:");
+
+  for (const issue of parsed.error.issues) {
+    console.error(`- ${issue.path.join(".")}: ${issue.message}`);
   }
 
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  process.exit(1); // Fail fast
 }
 
-function normalizeNetwork(value?: string): StellarNetwork | undefined {
-  if (!value) {
-    return undefined;
+const env = parsed.data;
+
+/**
+ * Additional runtime validation (context-aware)
+ */
+if (env.NODE_ENV === "production") {
+  if (!env.JWT_SECRET) {
+    console.error("❌ JWT_SECRET is required in production");
+    process.exit(1);
   }
 
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'testnet' || normalized === 'mainnet') {
-    return normalized;
+  if (!env.SOROBAN_RPC_URL) {
+    console.error("❌ SOROBAN_RPC_URL is required in production");
+    process.exit(1);
   }
 
-  return undefined;
-}
-
-function getConfiguredNetwork(): StellarNetwork {
-  const rawNetwork = readEnv('STELLAR_NETWORK') ?? readEnv('SOROBAN_NETWORK');
-  if (!rawNetwork) {
-    return 'testnet';
+  if (!env.HORIZON_URL) {
+    console.error("❌ HORIZON_URL is required in production");
+    process.exit(1);
   }
-
-  const network = normalizeNetwork(rawNetwork);
-  if (!network) {
-    throw new Error('STELLAR_NETWORK (or SOROBAN_NETWORK) must be either "testnet" or "mainnet"');
-  }
-
-  return network;
 }
 
-function readPerNetworkContractId(
-  network: StellarNetwork,
-  contractType: 'VAULT' | 'SETTLEMENT'
-): string | undefined {
-  const prefix = network === 'testnet' ? 'TESTNET' : 'MAINNET';
-
-  return (
-    readEnv(`STELLAR_${prefix}_${contractType}_CONTRACT_ID`) ??
-    readEnv(`SOROBAN_${prefix}_${contractType}_CONTRACT_ID`)
-  );
-}
-
-function getNetworkConfig(network: StellarNetwork): StellarNetworkConfig {
-  const prefix = network === 'testnet' ? 'TESTNET' : 'MAINNET';
-
-  const defaultHorizonUrl =
-    network === 'testnet'
-      ? 'https://horizon-testnet.stellar.org'
-      : 'https://horizon.stellar.org';
-  const defaultSorobanRpcUrl =
-    network === 'testnet'
-      ? 'https://soroban-testnet.stellar.org'
-      : 'https://soroban-mainnet.stellar.org';
-
-  return {
-    network,
-    networkPassphrase: network === 'testnet' ? Networks.TESTNET : Networks.PUBLIC,
-    horizonUrl: readEnv(`STELLAR_${prefix}_HORIZON_URL`) ?? defaultHorizonUrl,
-    sorobanRpcUrl: readEnv(`SOROBAN_${prefix}_RPC_URL`) ?? defaultSorobanRpcUrl,
-    vaultContractId: readPerNetworkContractId(network, 'VAULT'),
-    settlementContractId: readPerNetworkContractId(network, 'SETTLEMENT'),
-  };
-}
-
-const configuredNetwork = getConfiguredNetwork();
-const testnetConfig = getNetworkConfig('testnet');
-const mainnetConfig = getNetworkConfig('mainnet');
-const activeConfig = configuredNetwork === 'testnet' ? testnetConfig : mainnetConfig;
-
+/**
+ * Final typed config object
+ */
 export const config = {
-  port: Number(process.env.PORT ?? 3000),
-  nodeEnv: process.env.NODE_ENV ?? 'development',
-  /**
-   * Primary PostgreSQL connection string used by the shared pg.Pool.
-   * Example (matches docker-compose): postgresql://postgres:postgres@postgres:5432/callora?schema=public
-   */
-  databaseUrl:
-    process.env.DATABASE_URL ??
-    'postgresql://postgres:postgres@localhost:5432/callora?schema=public',
-  /**
-   * Connection pool tuning. These can be overridden via environment variables
-   * but have sensible defaults for local development.
-   */
+  port: env.PORT,
+  nodeEnv: env.NODE_ENV,
+
+  databaseUrl: env.DATABASE_URL,
+
   dbPool: {
-    max: Number(process.env.DB_POOL_MAX ?? 10),
-    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? 30_000),
-    connectionTimeoutMillis: Number(process.env.DB_CONN_TIMEOUT_MS ?? 2_000),
+    max: env.DB_POOL_MAX,
+    idleTimeoutMillis: env.DB_IDLE_TIMEOUT_MS,
+    connectionTimeoutMillis: env.DB_CONN_TIMEOUT_MS,
+  },
+
+  jwt: {
+    secret: env.JWT_SECRET ?? "dev-secret-change-me",
+  },
+
+  metrics: {
+    apiKey: env.METRICS_API_KEY,
+  },
+
+  stellar: {
+    sorobanRpcUrl: env.SOROBAN_RPC_URL,
+    horizonUrl: env.HORIZON_URL,
   },
   stellar: {
     ...activeConfig,
@@ -114,3 +111,17 @@ export const config = {
     },
   },
 };
+
+/**
+ * Log safe config summary (no secrets!)
+ */
+if (env.NODE_ENV !== "test") {
+  console.log("✅ Config loaded:");
+  console.log({
+    nodeEnv: config.nodeEnv,
+    port: config.port,
+    databaseUrl: config.databaseUrl,
+    jwtSecret: config.jwt.secret ? mask(config.jwt.secret) : undefined,
+    metricsEnabled: Boolean(config.metrics.apiKey),
+  });
+}

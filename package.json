@@ -12,7 +12,8 @@
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
     "validate:issue-9": "node scripts/validate-issue-9.mjs",
-    "test": "jest --runInBand"
+    "test": "jest",
+    "test:serial": "jest --runInBand"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.4.1",
@@ -32,7 +33,8 @@
     "pino": "^10.3.1",
     "prisma": "^7.4.1",
     "prom-client": "^15.1.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/axios": "^0.9.36",
