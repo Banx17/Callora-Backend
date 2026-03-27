@@ -46,9 +46,7 @@ function createTestApp() {
 describe('API Key Revocation Route', () => {
   beforeEach(() => {
     // Clear the keys before each test
-    // Assuming we can clear it or we just create unique keys.
-    // The repository doesn't have a built-in clear method, so we will
-    // just interact with unique keys per test.
+    apiKeyRepository.clear();
   });
 
   it('revokes an API key successfully', async () => {
@@ -87,6 +85,72 @@ describe('API Key Revocation Route', () => {
       .set('x-user-id', userId);
 
     expect(response.status).toBe(204);
+  });
+
+  it('should verify API keys correctly', async () => {
+    const userId = 'user-1';
+    const createResult = apiKeyRepository.create({
+      apiId: 'api-1',
+      userId,
+      scopes: ['read', 'write'],
+      rateLimitPerMinute: 100
+    });
+
+    // Valid key should verify
+    const verifiedKey = apiKeyRepository.verify(createResult.key);
+    expect(verifiedKey).toBeTruthy();
+    expect(verifiedKey!.userId).toBe(userId);
+    expect(verifiedKey!.scopes).toEqual(['read', 'write']);
+    expect(verifiedKey!.keyHash).toBe('[REDACTED]');
+
+    // Invalid key should not verify
+    expect(apiKeyRepository.verify('invalid_key')).toBeNull();
+  });
+
+  it('should rotate API keys securely', async () => {
+    const userId = 'user-1';
+    const createResult = apiKeyRepository.create({
+      apiId: 'api-1',
+      userId,
+      scopes: ['read'],
+      rateLimitPerMinute: 50
+    });
+
+    const keys = apiKeyRepository.listForTesting();
+    const keyId = keys.find(k => k.userId === userId)!.id;
+
+    const rotateResult = apiKeyRepository.rotate(keyId, userId);
+    expect(rotateResult.success).toBe(true);
+    
+    if (rotateResult.success) {
+      // Old key should no longer work
+      expect(apiKeyRepository.verify(createResult.key)).toBeNull();
+      
+      // New key should work
+      expect(apiKeyRepository.verify(rotateResult.newKey)).toBeTruthy();
+      expect(rotateResult.newKey).not.toBe(createResult.key);
+    }
+  });
+
+  it('should reject rotation for unauthorized users', async () => {
+    const userId = 'user-1';
+    const otherUserId = 'user-2';
+    
+    apiKeyRepository.create({
+      apiId: 'api-1',
+      userId,
+      scopes: ['*'],
+      rateLimitPerMinute: null
+    });
+
+    const keys = apiKeyRepository.listForTesting();
+    const keyId = keys.find(k => k.userId === userId)!.id;
+
+    const rotateResult = apiKeyRepository.rotate(keyId, otherUserId);
+    expect(rotateResult.success).toBe(false);
+    if (!rotateResult.success) {
+      expect(rotateResult.error).toBe('forbidden');
+    }
   });
 
   it('returns 403 when trying to revoke a key owned by another user', async () => {
