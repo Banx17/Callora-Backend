@@ -39,10 +39,7 @@ let originalDispatchToAll: typeof dispatchToAll;
 describe('Event Emitter - Memory Leak Safety', () => {
     beforeEach(() => {
         // Clear webhook store before each test
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        WebhookStore.clear();
         
         // Mock dispatchToAll to avoid actual HTTP calls
         originalDispatchToAll = dispatchToAll;
@@ -51,10 +48,7 @@ describe('Event Emitter - Memory Leak Safety', () => {
 
     afterEach(() => {
         // Clean up webhook store after each test
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        WebhookStore.clear();
         
         // Restore original function
         // (In a real implementation, you'd use dependency injection)
@@ -71,7 +65,7 @@ describe('Event Emitter - Memory Leak Safety', () => {
         assert.equal(calloraEvents.listenerCount('low_balance_alert'), 1, 'Should have 1 low_balance_alert listener');
     });
 
-    test('event emission does not accumulate listeners', () => {
+    test('event emission does not accumulate listeners', async () => {
         const initialListenerCount = calloraEvents.listenerCount('new_api_call');
         
         // Emit multiple events
@@ -194,13 +188,10 @@ describe('Event Emitter - Memory Leak Safety', () => {
 
         assert.equal(WebhookStore.list().length, initialCount + 100, 'Webhook store should contain all registered configs');
 
-        // Clean up all configs
-        const allConfigs = WebhookStore.list();
-        for (const config of allConfigs) {
-            WebhookStore.delete(config.developerId);
-        }
+        // Clean up all configs using clear method
+        WebhookStore.clear();
 
-        assert.equal(WebhookStore.list().length, initialCount, 'Webhook store should be clean after deletion');
+        assert.equal(WebhookStore.list().length, 0, 'Webhook store should be empty after clear');
     });
 
     test('event payload structure is maintained correctly', async () => {
