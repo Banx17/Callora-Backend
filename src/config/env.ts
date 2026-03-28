@@ -38,17 +38,17 @@ const envSchema = z
 
     // Soroban RPC (optional)
     SOROBAN_RPC_ENABLED: z
-      .string()
-      .transform((v) => v === 'true')
-      .default('false'),
+      .coerce
+      .boolean()
+      .default(false),
     SOROBAN_RPC_URL: z.string().url().optional(),
     SOROBAN_RPC_TIMEOUT: z.coerce.number().default(2_000),
 
     // Horizon (optional)
     HORIZON_ENABLED: z
-      .string()
-      .transform((v) => v === 'true')
-      .default('false'),
+      .coerce
+      .boolean()
+      .default(false),
     HORIZON_URL: z.string().url().optional(),
     HORIZON_TIMEOUT: z.coerce.number().default(2_000),
 
@@ -63,9 +63,9 @@ const envSchema = z
 
     // Profiling
     GATEWAY_PROFILING_ENABLED: z
-      .string()
-      .transform((v) => v === 'true')
-      .default('false'),
+      .coerce
+      .boolean()
+      .default(false),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {

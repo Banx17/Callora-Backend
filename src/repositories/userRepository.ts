@@ -1,17 +1,38 @@
 import prisma from '../lib/prisma.js';
-import type { User } from '../generated/prisma/client.js';
 import type { PaginationParams } from '../lib/pagination.js';
 
-export type UserListItem = Pick<User, 'id' | 'stellar_address' | 'created_at'>;
+export interface UserListItem {
+  id: string;
+  stellar_address: string | null;
+  created_at: Date;
+}
 
 interface FindUsersResult {
   users: UserListItem[];
   total: number;
 }
 
+type UserRepositoryPrisma = {
+  $transaction: (operations: [Promise<UserListItem[]>, Promise<number>]) => Promise<[UserListItem[], number]>;
+  user: {
+    findMany: (args: {
+      select: {
+        id: true;
+        stellar_address: true;
+        created_at: true;
+      };
+      orderBy: { created_at: 'desc' };
+      skip: number;
+      take: number;
+    }) => Promise<UserListItem[]>;
+    count: () => Promise<number>;
+  };
+};
+
 export async function findUsers(params: PaginationParams): Promise<FindUsersResult> {
-  const [users, total] = await prisma.$transaction([
-    prisma.user.findMany({
+  const prismaClient = prisma as unknown as UserRepositoryPrisma;
+  const [users, total] = await prismaClient.$transaction([
+    prismaClient.user.findMany({
       select: {
         id: true,
         stellar_address: true,
@@ -21,7 +42,7 @@ export async function findUsers(params: PaginationParams): Promise<FindUsersResu
       skip: params.offset,
       take: params.limit,
     }),
-    prisma.user.count(),
+    prismaClient.user.count(),
   ]);
 
   return { users, total };

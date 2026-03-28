@@ -85,7 +85,9 @@ describe('SorobanRpcBillingClient', () => {
 
     assert.deepEqual(result, { txHash: '0xbilling123' });
 
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const firstCall = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const [, init] = firstCall;
     assert.deepEqual(JSON.parse(String(init.body)), {
       jsonrpc: '2.0',
       id: 'req-deduct',

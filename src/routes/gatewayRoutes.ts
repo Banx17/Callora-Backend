@@ -14,18 +14,7 @@ const CREDIT_COST_PER_CALL = 1; // cost per proxied request
 export function createGatewayRouter(deps: GatewayDeps): Router {
   const { billing, rateLimiter, usageStore, upstreamUrl } = deps;
   const router = Router();
-  const authMiddleware = deps.authMiddleware ?? createMapBackedGatewayApiKeyAuthMiddleware({
-    apiKeys: deps.apiKeys,
-    resolveApiContext(req) {
-      return {
-        api: { id: req.params.apiId },
-        endpoint: { endpointId: 'legacy', path: '*', priceUsdc: CREDIT_COST_PER_CALL },
-      };
-    },
-    getApiId(api) {
-      return String(api.id);
-    },
-  });
+  const apiKeys = deps.apiKeys ?? new Map();
 
   // Validation schema for API ID parameter
   const apiIdParamsSchema = z.object({
@@ -70,7 +59,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
 
     // 3. Billing deduction
     const billingResult = await billing.deductCredit(
-      keyRecord.userId,
+      keyRecord.developerId,
       CREDIT_COST_PER_CALL,
     );
     if (!billingResult.success) {
@@ -107,10 +96,10 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
       id: randomUUID(),
       requestId: randomUUID(), // legacy gateway doesn't carry request ID
       apiKey: apiKeyHeader,
-      apiKeyId: keyRecord.id,
+      apiKeyId: keyRecord.key,
       apiId: keyRecord.apiId,
       endpointId: 'legacy',
-      userId: keyRecord.userId,
+      userId: keyRecord.developerId,
       amountUsdc: CREDIT_COST_PER_CALL,
       statusCode: upstreamStatus,
       timestamp: new Date().toISOString(),
